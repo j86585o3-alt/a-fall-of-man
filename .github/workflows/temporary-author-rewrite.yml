@@ -1,0 +1,59 @@
+name: One-shot commit author correction
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite-author:
+    if: github.event.pull_request.head.ref == 'automation/trigger-rewrite-author-e8e3bc8'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Replace target commit and remove this workflow
+        shell: bash
+        env:
+          OLD_COMMIT: e8e3bc8cde808365854b38a16d0d0c15da353aa1
+          EXPECTED_PARENT: 906524e23e94881b5d443ebeccdf0d3a2d28536a
+          WORKFLOW_PATH: .github/workflows/temporary-author-rewrite.yml
+          NEW_NAME: a-fall-of-man
+          NEW_EMAIL: 297017752+a-fall-of-man@users.noreply.github.com
+        run: |
+          set -euo pipefail
+
+          git fetch origin main --force
+          current_main="$(git rev-parse origin/main)"
+          test "$(git rev-parse "$current_main^")" = "$OLD_COMMIT"
+          test "$(git rev-parse "$OLD_COMMIT^")" = "$EXPECTED_PARENT"
+          test "$(git diff --name-only "$OLD_COMMIT" "$current_main")" = "$WORKFLOW_PATH"
+
+          old_tree="$(git rev-parse "$OLD_COMMIT^{tree}")"
+          message_file="$(mktemp)"
+          git cat-file commit "$OLD_COMMIT" | sed '1,/^$/d' > "$message_file"
+
+          export GIT_AUTHOR_NAME="$NEW_NAME"
+          export GIT_AUTHOR_EMAIL="$NEW_EMAIL"
+          export GIT_AUTHOR_DATE="$(git show -s --format=%aI "$OLD_COMMIT")"
+          export GIT_COMMITTER_NAME="$NEW_NAME"
+          export GIT_COMMITTER_EMAIL="$NEW_EMAIL"
+          export GIT_COMMITTER_DATE="$(git show -s --format=%cI "$OLD_COMMIT")"
+
+          new_commit="$(git commit-tree "$old_tree" -p "$EXPECTED_PARENT" < "$message_file")"
+
+          test "$(git rev-parse "$new_commit^{tree}")" = "$old_tree"
+          test "$(git rev-parse "$new_commit^")" = "$EXPECTED_PARENT"
+          test "$(git show -s --format=%an "$new_commit")" = "$NEW_NAME"
+          test "$(git show -s --format=%ae "$new_commit")" = "$NEW_EMAIL"
+
+          git push origin "$new_commit:refs/heads/main" \
+            --force-with-lease="refs/heads/main:$current_main"
+
+          echo "Replaced $OLD_COMMIT with $new_commit"
