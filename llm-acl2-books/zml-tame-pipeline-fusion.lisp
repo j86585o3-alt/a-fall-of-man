@@ -5,7 +5,6 @@
 
 (in-package "ACL2")
 
-(include-book "projects/apply-model/ex2/user-defs" :dir :system)
 (include-book "tools/def-functional-instance" :dir :system)
 (include-book "xdoc/top" :dir :system)
 
@@ -16,8 +15,8 @@
   :long
   "<p>A pipeline is a finite list of <tt>(:MAP fn)</tt> and
   <tt>(:FILTER fn)</tt> stages.  Its direct semantics allocates one complete
-  intermediate list per stage using the APPLY$ model's <tt>COLLECT</tt> and
-  <tt>FILTER</tt>.  The fused executor instead threads each input element
+  intermediate list per stage using local reference functions <tt>VPF-COLLECT</tt> and
+  <tt>VPF-FILTER</tt>.  The fused executor instead threads each input element
   through every stage and emits at most one output, traversing the input once
   and constructing no intermediate lists.</p>
 
@@ -79,9 +78,9 @@
       (cond ((vpf-map-stage-p stage)
              (vpf-run-one
               (cdr stages)
-              (modapp::apply$ (vpf-stage-function stage) (list value))))
+              (apply$ (vpf-stage-function stage) (list value))))
             ((vpf-filter-stage-p stage)
-             (if (modapp::apply$ (vpf-stage-function stage) (list value))
+             (if (apply$ (vpf-stage-function stage) (list value))
                  (vpf-run-one (cdr stages) value)
                (mv nil value)))
             (t
@@ -99,14 +98,28 @@
             (vpf-run-fused stages (cdr input)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defun vpf-collect (input fn)
+  (if (endp input)
+      nil
+    (cons (apply$ fn (list (car input)))
+          (vpf-collect (cdr input) fn))))
+
+(defun vpf-filter (input fn)
+  (if (endp input)
+      nil
+    (if (apply$ fn (list (car input)))
+        (cons (car input)
+              (vpf-filter (cdr input) fn))
+      (vpf-filter (cdr input) fn))))
+
 ;; 3. Staged reference semantics
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun vpf-run-stage-list (stage input)
   (cond ((vpf-map-stage-p stage)
-         (modapp::collect input (vpf-stage-function stage)))
+         (vpf-collect input (vpf-stage-function stage)))
         ((vpf-filter-stage-p stage)
-         (modapp::filter input (vpf-stage-function stage)))
+         (vpf-filter input (vpf-stage-function stage)))
         (t
          (true-list-fix input))))
 
@@ -127,7 +140,7 @@
           value)
          (vpf-one-output
           rest
-          (modapp::apply$ fn (list value))))
+          (apply$ fn (list value))))
   :hints (("Goal"
            :in-theory (enable vpf-one-output
                               vpf-run-one
@@ -140,7 +153,7 @@
   (equal (vpf-one-output
           (cons (vpf-filter-stage fn) rest)
           value)
-         (if (modapp::apply$ fn (list value))
+         (if (apply$ fn (list value))
              (vpf-one-output rest value)
            nil))
   :hints (("Goal"
@@ -152,19 +165,19 @@
                               vpf-stage-function))))
 
 (defthm vpf-run-fused-after-collect
-  (equal (vpf-run-fused rest (modapp::collect input fn))
+  (equal (vpf-run-fused rest (vpf-collect input fn))
          (vpf-run-fused (cons (vpf-map-stage fn) rest) input))
   :hints (("Goal"
-           :induct (modapp::collect input fn)
-           :in-theory (enable modapp::collect
+           :induct (vpf-collect input fn)
+           :in-theory (enable vpf-collect
                               vpf-run-fused))))
 
 (defthm vpf-run-fused-after-filter
-  (equal (vpf-run-fused rest (modapp::filter input fn))
+  (equal (vpf-run-fused rest (vpf-filter input fn))
          (vpf-run-fused (cons (vpf-filter-stage fn) rest) input))
   :hints (("Goal"
-           :induct (modapp::filter input fn)
-           :in-theory (enable modapp::filter
+           :induct (vpf-filter input fn)
+           :in-theory (enable vpf-filter
                               vpf-run-fused))))
 
 (defthm vpf-run-fused-of-true-list-fix
